@@ -6,6 +6,22 @@ import os
 
 from . import exception, _isstring
 
+import socket
+import fcntl
+import struct
+import time
+def get_ip_address(ifname):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    while True:
+        try:
+            ip_addr = socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', ifname[:15].encode('utf-8')))[20:24])
+            break
+        except:
+            print("Failed to get IP address on interface, retrying in 5 secs...")
+            time.sleep(5)
+    return ip_addr
+
+
 # Suppress InsecurePlatformWarning
 urllib3.disable_warnings()
 
@@ -39,9 +55,47 @@ def set_proxy(url, basic_auth=None):
         _pools['default'] = urllib3.ProxyManager(url, **_default_pool_params)
         _onetime_pool_spec = (urllib3.ProxyManager, dict(proxy_url=url, **_onetime_pool_params))
 
-def _create_onetime_pool():
-    cls, kw = _onetime_pool_spec
-    return cls(**kw)
+def set_interface(interface):
+    """
+    Access Bot API through a specific interface.
+    """
+    global _pools, _onetime_pool_spec
+
+    ip_address = get_ip_address(interface)
+
+    params = _default_pool_params.copy()
+    params['source_address'] = (ip_address, 0)
+    _pools['default'] = urllib3.PoolManager(**params)
+
+    onetime_params = _onetime_pool_params.copy()
+    onetime_params['source_address'] = (ip_address, 0)
+    _onetime_pool_spec = (urllib3.PoolManager, onetime_params)
+
+def set_source_address(ip_address):
+    """
+    Access Bot API using a specific source address. This is the same as the 'set_interface' method, except here the
+    IP address of the desired interface is specified, rather than the interface name.
+    """
+    params = _default_pool_params.copy()
+    params['source_address'] = (ip_address, 0)
+    _pools['default'] = urllib3.PoolManager(**params)
+
+    onetime_params = _onetime_pool_params.copy()
+    onetime_params['source_address'] = (ip_address, 0)
+    _onetime_pool_spec = (urllib3.PoolManager, onetime_params)
+
+
+def _create_onetime_pool(*user_args):
+    interface = user_args[0]
+    if interface is None:
+        cls, kw = _onetime_pool_spec
+        return cls(**kw)
+    else:
+        params = _onetime_pool_params.copy()
+        ip_addr = get_ip_address(interface)
+        params['source_address'] = (ip_addr, 0)
+        return urllib3.PoolManager(**params)
+
 
 def _methodurl(req, **user_kw):
     token, method, params, files = req
@@ -112,7 +166,7 @@ def _compose_kwargs(req, **user_kw):
     kw.update(user_kw)
     return kw
 
-def _transform(req, **user_kw):
+def _transform(req, *user_args, **user_kw):
     kwargs = _compose_kwargs(req, **user_kw)
 
     fields = _compose_fields(req, **user_kw)
@@ -122,9 +176,16 @@ def _transform(req, **user_kw):
     name = _which_pool(req, **user_kw)
 
     if name is None:
-        pool = _create_onetime_pool()
+        pool = _create_onetime_pool(*user_args)
     else:
-        pool = _pools[name]
+        interface = user_args[0]
+        if interface is None:
+            pool = _pools[name]
+        else:
+            params = _default_pool_params.copy()
+            ip_addr = get_ip_address(interface)
+            params['source_address'] = (ip_addr, 0)
+            pool = urllib3.PoolManager(**params)
 
     return pool.request_encode_body, ('POST', url, fields), kwargs
 
@@ -149,8 +210,8 @@ def _parse(response):
         # ... or raise generic error
         raise exception.TelegramError(description, error_code, data)
 
-def request(req, **user_kw):
-    fn, args, kwargs = _transform(req, **user_kw)
+def request(req, *user_args, **user_kw):
+    fn, args, kwargs = _transform(req, *user_args, **user_kw)
     r = fn(*args, **kwargs)  # `fn` must be thread-safe
     return _parse(r)
 
@@ -158,7 +219,7 @@ def _fileurl(req):
     token, path = req
     return 'https://api.telegram.org/file/bot%s/%s' % (token, path)
 
-def download(req, **user_kw):
-    pool = _create_onetime_pool()
+def download(req, *user_args, **user_kw):
+    pool = _create_onetime_pool(*user_args)
     r = pool.request('GET', _fileurl(req), **user_kw)
     return r

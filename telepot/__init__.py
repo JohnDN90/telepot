@@ -464,7 +464,7 @@ class Bot(_BotBase):
         def on_event(self, fn):
             self._event_handler = fn
 
-    def __init__(self, token):
+    def __init__(self, token, interface=None):
         super(Bot, self).__init__(token)
 
         self._scheduler = self.Scheduler()
@@ -475,6 +475,8 @@ class Bot(_BotBase):
                                               'chosen_inline_result': lambda msg: self.on_chosen_inline_result(msg)})
                                               # use lambda to delay evaluation of self.on_ZZZ to runtime because
                                               # I don't want to require defining all methods right here.
+
+        self.interface = interface
 
     @property
     def scheduler(self):
@@ -488,7 +490,7 @@ class Bot(_BotBase):
         self._router.route(msg)
 
     def _api_request(self, method, params=None, files=None, **kwargs):
-        return api.request((self._token, method, params, files), **kwargs)
+        return api.request((self._token, method, params, files), self.interface, **kwargs)
 
     def _api_request_with_file(self, method, params, file_key, file_value, **kwargs):
         if _isstring(file_value):
@@ -1053,7 +1055,7 @@ class Bot(_BotBase):
         try:
             d = dest if _isfile(dest) else open(dest, 'wb')
 
-            r = api.download((self._token, f['file_path']), preload_content=False)
+            r = api.download((self._token, f['file_path']), self.interface, preload_content=False)
 
             while 1:
                 data = r.read(self._file_chunk_size)
